@@ -1,0 +1,31 @@
+# QR Code
+
+```elixir
+Mix.install([
+  {:kino, "~> 0.6.1"},
+  {:eqrcode, "~> 0.1.10"}
+])
+```
+
+## Import
+
+[![Run in Livebook](https://livebook.dev/badge/v1/blue.svg)](https://livebook.dev/run?url=https%3A%2F%2Fraw.githubusercontent.com%2Fdanielrw7%2Flivebook-public%2Fmaster%2Fqr-code.livemd)
+
+[View Source on GitHub](https://github.com/danielrw7/livebook-public/blob/master/qr-code.livemd)
+
+## Define Content
+
+```elixir
+content = "content"
+```
+
+## Generate QR
+
+```elixir
+content
+|> EQRCode.encode()
+|> EQRCode.png()
+|> Kino.Image.new("image/png")
+```
+
+TODO: button to download

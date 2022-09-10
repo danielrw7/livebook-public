@@ -1,0 +1,255 @@
+# CSV Transformation
+
+```elixir
+Mix.install([
+  {:nimble_csv, "~> 1.1"},
+  {:kino, "~> 0.6.1"}
+])
+
+defmodule Kino.FileInput do
+  use Kino.JS
+  use Kino.JS.Live
+
+  def new(attrs) do
+    module = Kino.JS.Live.new(__MODULE__, attrs)
+
+    Kino.Bridge.reference_object(module.ref, self())
+
+    Kino.Bridge.monitor_object(
+      module.ref,
+      Kino.SubscriptionManager.cross_node_name(),
+      {:clear_topic, module.ref}
+    )
+
+    module
+  end
+
+  @impl true
+  def init(attrs, ctx) do
+    {
+      :ok,
+      ctx
+      |> assign(ref: ctx.__private__.ref)
+      |> assign(attrs: attrs)
+    }
+  end
+
+  @impl true
+  def handle_connect(ctx) do
+    {:ok, ctx.assigns.attrs, ctx}
+  end
+
+  @impl true
+  def handle_event("input", files, ctx) do
+    files =
+      files
+      |> Enum.map(fn %{"name" => name, "data" => data, "type" => type} ->
+        %{name: name, data: data, type: type}
+      end)
+
+    send(
+      Kino.SubscriptionManager.cross_node_name(),
+      {:event, ctx.assigns.ref, %{type: :value, value: files}}
+    )
+
+    {:noreply, ctx}
+  end
+
+  def control(kino) do
+    %Kino.Control{
+      attrs: %{
+        ref: kino.ref
+      }
+    }
+  end
+
+  def stream(kino, method) do
+    Kino.Control.stream(control(kino), method)
+  end
+
+  asset "main.js" do
+    """
+    export function init(ctx, { label, attrs }) {
+      ctx.root.innerHTML = (`${label ? label + ':' : ''} <input type="file" ${attrs} />`)
+      ctx.root.querySelector('input').addEventListener('input', async function (event) {
+        ctx.pushEvent('input', await Promise.all([...this.files].map(async (file) => {
+          const data = await new Promise((resolve, reject) => {
+            var reader = new FileReader();
+            reader.onload = function(e) {
+              resolve(e.target.result);
+            };
+            reader.onerror = function(e) {
+              reject(e)
+            };
+            reader.readAsBinaryString(file);
+          })
+          return {
+            name: file.name,
+            type: file.type,
+            data,
+          }
+        })))
+      })
+    }
+    """
+  end
+end
+
+defmodule Kino.Download do
+  use Kino.JS
+
+  def new(file) do
+    Kino.JS.new(__MODULE__, file)
+  end
+
+  asset "main.js" do
+    """
+    import "https://cdn.jsdelivr.net/npm/file-saver@2.0.0/src/FileSaver.min.js";
+
+    export function init(ctx, { label, file }) {
+      const $button = document.createElement('button')
+      $button.innerHTML = label
+      $button.addEventListener('click', () => {
+        saveAs(new Blob([file.data], { type: file.type }), file.name)
+      })
+      ctx.root.appendChild($button)
+    }
+    """
+  end
+end
+```
+
+## Import
+
+[![Run in Livebook](https://livebook.dev/badge/v1/pink.svg)](https://livebook.dev/run?url=https%3A%2F%2Fraw.githubusercontent.com%2Fdanielrw7%2Flivebook-public%2Fmaster%2Fcsv.livemd)
+
+[View Source on GitHub](https://github.com/danielrw7/livebook-public/blob/master/csv.livemd)
+
+## Get Input
+
+Uses [NimbleCSV](https://github.com/dashbitco/nimble_csv) and custom `Kino.FileInput` and `Kino.Download` modules (defined in setup)
+
+To start over with a different file, either re-evaluate every cell (Ctrl+Shift+Enter) or use the "Erase outputs" option (slower). Sometimes the cell with the file input will show an error, but it should still work
+
+```elixir
+NimbleCSV.define(MyParser, separator: ",", escape: "\"")
+```
+
+```elixir
+alias Kino.FileInput
+
+input = FileInput.new(%{label: "File", attrs: ~s(accept="text/csv")})
+
+input |> Kino.render()
+
+{:ok, pid} = Agent.start_link(fn -> nil end)
+
+cell = self()
+
+FileInput.stream(input, fn %{type: :value, value: files} ->
+  file = files |> Enum.find(fn %{type: type} -> type == "text/csv" end)
+
+  if file do
+    send(cell, {:file, file})
+  end
+end)
+
+file =
+  receive do
+    {:file, f} -> f
+  end
+```
+
+## Transform
+
+```elixir
+# for some reason the parser is ignoring the first line
+data =
+  ("\n" <> file.data)
+  |> MyParser.parse_string()
+```
+
+```elixir
+first_row_headers = 1
+# first_row_headers = 0
+
+max_len =
+  data
+  |> Stream.map(&length/1)
+  |> Enum.max()
+
+headers =
+  if first_row_headers != 0 do
+    data
+    |> Enum.take(1)
+    |> List.first()
+  else
+    0..(max_len - 1)
+  end
+
+map_data =
+  data
+  |> Enum.drop(first_row_headers)
+  |> Enum.map(fn row ->
+    headers
+    |> Enum.zip(row ++ (0..(max_len - length(row)) |> Enum.map(fn _ -> nil end)))
+    |> Enum.into(%{})
+  end)
+
+map_data
+|> Kino.DataTable.new()
+```
+
+```elixir
+defmodule Transform do
+  def transform_data(data) do
+    data
+    |> Enum.map(fn map ->
+      map |> Map.put("some-key", :rand.uniform(10))
+    end)
+  end
+
+  def map_list_to_csv_rows(data, headers) do
+    data
+    |> Enum.map(fn row ->
+      Enum.map(headers, fn header -> row[header] end)
+    end)
+  end
+end
+
+add_headers = ["some-key"]
+
+prepend_headers =
+  if first_row_headers != 0 do
+    [headers ++ add_headers]
+  else
+    []
+  end
+
+transformed_data =
+  (prepend_headers ++
+     (map_data
+      |> Transform.transform_data()
+      |> Transform.map_list_to_csv_rows((headers |> Enum.to_list()) ++ add_headers)))
+  |> IO.inspect()
+
+content =
+  transformed_data
+  |> MyParser.dump_to_iodata()
+  |> IO.iodata_to_binary()
+```
+
+## Download
+
+```elixir
+now =
+  DateTime.utc_now()
+  |> Calendar.strftime("%Y-%m-%d-%H-%M-%S")
+
+filename = "output-#{now}.csv"
+
+Kino.Download.new(%{
+  label: ~s(Download "#{filename}"),
+  file: %{name: filename, data: content, type: "text/csv"}
+})
+```
