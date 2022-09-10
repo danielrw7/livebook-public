@@ -129,7 +129,7 @@ end
 
 Uses [NimbleCSV](https://github.com/dashbitco/nimble_csv) and custom `Kino.FileInput` and `Kino.Download` modules (defined in setup)
 
-To start over with a different file, either re-evaluate every cell (Ctrl+Shift+Enter) or use the "Erase outputs" option (slower). Sometimes the cell with the file input will show an error, but it should still work
+To start over with a different file upload, either re-evaluate every cell (Ctrl+Shift+Enter) or use the "Erase outputs" option (slower). Sometimes the cell with the file input will then show an error, but it should still work
 
 ```elixir
 NimbleCSV.define(MyParser, separator: ",", escape: "\"")
@@ -139,11 +139,11 @@ NimbleCSV.define(MyParser, separator: ",", escape: "\"")
 alias Kino.FileInput
 
 input = FileInput.new(%{label: "File", attrs: ~s(accept="text/csv")})
+```
 
-input |> Kino.render()
+Wait until a CSV is uploaded
 
-{:ok, pid} = Agent.start_link(fn -> nil end)
-
+```elixir
 cell = self()
 
 FileInput.stream(input, fn %{type: :value, value: files} ->
@@ -160,7 +160,7 @@ file =
   end
 ```
 
-## Transform
+## View Data
 
 ```elixir
 # for some reason the parser is ignoring the first line
@@ -200,6 +200,8 @@ map_data
 |> Kino.DataTable.new()
 ```
 
+## Transform
+
 ```elixir
 defmodule Transform do
   def transform_data(data) do
@@ -237,6 +239,17 @@ content =
   transformed_data
   |> MyParser.dump_to_iodata()
   |> IO.iodata_to_binary()
+```
+
+```elixir
+transformed_data
+|> Enum.drop(first_row_headers)
+|> Enum.map(fn row ->
+  headers
+  |> Enum.zip(row ++ (0..(max_len - length(row)) |> Enum.map(fn _ -> nil end)))
+  |> Enum.into(%{})
+end)
+|> Kino.DataTable.new()
 ```
 
 ## Download
